@@ -28,6 +28,17 @@ use blueos_hal::{isr::IsrDesc, Has8bitDataReg};
 pub type ClockImpl =
     blueos_driver::systimer::esp32_sys_timer::Esp32SysTimer<0x6002_3000, 16_000_000>;
 
+// The application image occupies flash below 0x11_0000. The remaining range is
+// reserved for dynamically installed XIP images and maps linearly into IROM.
+pub const LOADABLE_REGION_BASE: u32 = 0x0011_0000;
+// The QEMU boot image advertises a 2 MiB flash. Keep the driver region inside
+// that capacity; physical 0x110000 starts immediately after the factory slot.
+pub const LOADABLE_REGION_SIZE: u32 = 0x000f_0000;
+pub const LOADABLE_REGION_END: u32 = LOADABLE_REGION_BASE + LOADABLE_REGION_SIZE;
+pub const IROM_VADDR_BASE: u32 = 0x4200_0000;
+pub const DROM_VADDR_BASE: u32 = 0x3c00_0000;
+pub const FLASH_MMU_PAGE_SIZE: u32 = 0x0001_0000;
+
 core::arch::global_asm!(
     "
 .section .trap

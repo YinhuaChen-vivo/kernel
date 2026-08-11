@@ -1,4 +1,4 @@
-// Copyright (c) 2025 vivo Mobile Communication Co., Ltd.
+// Copyright (c) 2026 vivo Mobile Communication Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,24 +14,22 @@
 
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::devices::bus::{Bus, BusInterface};
+#[cfg(soc_esp32c3)]
+mod esp32_rom;
 
-pub(crate) mod flash;
-pub(crate) mod ic;
-pub(crate) mod msip;
-pub(crate) mod sensor;
-pub(crate) mod serial;
-pub(crate) mod timer;
+#[cfg(soc_esp32c3)]
+pub(crate) mod internal_flash;
 
-/// use c-compatible error type
-pub type Result<T> = core::result::Result<T, crate::error::Error>;
+#[cfg(soc_esp32c3)]
+pub mod flash_mmap;
 
-pub trait InitDriver<B: BusInterface>: Sized + Default {
-    type Data;
-    fn init(self, bus: &Bus<B>) -> Result<Self::Data>;
-}
+#[cfg(soc_esp32c3)]
+pub(crate) mod esp32_flash;
 
-pub trait DriverModule<B: BusInterface> {
-    type Data: InitDriver<B>;
-    fn probe(dev: &super::devices::DeviceData) -> Result<Self::Data>;
-}
+// Re-export so boot.rs can call `crate::drivers::flash::init_internal_flash()`
+// without naming the submodule path.
+#[cfg(soc_esp32c3)]
+pub(crate) use internal_flash::init_internal_flash;
+
+#[cfg(soc_esp32c3)]
+pub(crate) use esp32_flash::init_esp32_flash_device;

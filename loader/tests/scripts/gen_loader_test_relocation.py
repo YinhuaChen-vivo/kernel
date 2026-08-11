@@ -27,6 +27,9 @@ def parse_args():
     parser.add_argument("--origin", required=True)
     parser.add_argument("--length", required=True)
     parser.add_argument("--permissions", required=True)
+    parser.add_argument("--rodata-origin")
+    parser.add_argument("--data-origin")
+    parser.add_argument("--data-length")
     parser.add_argument("--linker-script-template", required=True)
     parser.add_argument("--linker-script", required=True)
     return parser.parse_args()
@@ -48,13 +51,14 @@ def parse_number(value, description):
 
 
 def write_linker_script(template_path, path, region, origin, length,
-                        permissions):
+                        permissions, extra_replacements):
     replacements = {
         "@REGION@": region,
         "@ORIGIN@": f"0x{origin:x}",
         "@LENGTH@": f"0x{length:x}",
         "@PERMISSIONS@": permissions,
     }
+    replacements.update(extra_replacements)
     template = pathlib.Path(template_path).read_text(encoding="utf-8")
     placeholders = set(LINKER_SCRIPT_PLACEHOLDER_PATTERN.findall(template))
     expected_placeholders = set(replacements)
@@ -97,6 +101,20 @@ def main():
         raise ValueError(
             "permissions must be r, w, x, or a combination of them")
 
+    optional_values = (args.rodata_origin, args.data_origin, args.data_length)
+    if any(optional_values) and not all(optional_values):
+        raise ValueError("rodata origin, data origin and data length must be provided together")
+    extra_replacements = {}
+    if all(optional_values):
+        rodata_origin = parse_number(args.rodata_origin, "rodata origin")
+        data_origin = parse_number(args.data_origin, "data origin")
+        data_length = parse_number(args.data_length, "data length")
+        extra_replacements = {
+            "@RODATA_ORIGIN@": f"0x{rodata_origin:x}",
+            "@DATA_ORIGIN@": f"0x{data_origin:x}",
+            "@DATA_LENGTH@": f"0x{data_length:x}",
+        }
+
     write_linker_script(
         args.linker_script_template,
         args.linker_script,
@@ -104,6 +122,7 @@ def main():
         origin,
         length,
         args.permissions,
+        extra_replacements,
     )
 
 

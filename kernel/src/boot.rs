@@ -67,6 +67,8 @@ extern "C" {
     pub static mut __sys_stack_end: u8;
     pub static mut __heap_start: u8;
     pub static mut __heap_end: u8;
+    pub static mut __loader_rw_start: u8;
+    pub static mut __loader_rw_end: u8;
     pub static mut _end: u8;
 }
 
@@ -137,6 +139,12 @@ extern "C" fn init() {
         let fdt = unsafe { Fdt::from_ptr(crate::boards::DRAM_BASE as *const u8).unwrap() };
         // initialize virtio
         virtio::init_virtio(&fdt);
+    }
+    #[cfg(soc_esp32c3)]
+    {
+        crate::drivers::flash::init_internal_flash()
+            .expect("Failed to initialize ESP32-C3 internal flash driver");
+        crate::drivers::flash::init_esp32_flash_device().expect("Failed to register esp32-flash0");
     }
     #[cfg(enable_vfs)]
     init_vfs();

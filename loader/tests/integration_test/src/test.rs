@@ -22,6 +22,8 @@ use semihosting::{io::Read, println};
 
 extern "C" {
     static LOADER_TEST_ELF_PATH: *const c_char;
+    #[cfg(loader_test_large_exec)]
+    static LOADER_TEST_USELIBRS_ELF_PATH: *const c_char;
     static INVALID_MAGIC_ELF_PATH: *const c_char;
     static INVALID_ENTRY_ELF_PATH: *const c_char;
     static INVALID_SEGMENT_SIZE_ELF_PATH: *const c_char;
@@ -31,7 +33,7 @@ extern "C" {
 mod loader_test_config {
     use blueos_loader as loader;
 
-    const fn parse_hex(value: &str) -> usize {
+    pub const fn parse_hex(value: &str) -> usize {
         let bytes = value.as_bytes();
         if bytes.len() <= 2 || bytes[0] != b'0' || (bytes[1] != b'x' && bytes[1] != b'X') {
             panic!("loader test relocation value must be hexadecimal");
@@ -52,7 +54,7 @@ mod loader_test_config {
         result
     }
 
-    const fn parse_permissions(value: &str) -> loader::MemoryPermissions {
+    pub const fn parse_permissions(value: &str) -> loader::MemoryPermissions {
         let bytes = value.as_bytes();
         let mut index = 0;
         let mut permissions = loader::MemoryPermissions::NONE;
@@ -78,12 +80,63 @@ mod loader_test_config {
     pub static TEST_REGIONS: [loader::MemoryRegion; 1] = [unsafe {
         loader::MemoryRegion::new(TEST_REGION_START, TEST_REGION_END, TEST_REGION_PERMISSIONS)
     }];
+
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_TEST_REGION_START: usize =
+        parse_hex(env!("LOADER_TEST_LARGE_RELOCATION_ORIGIN"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_TEST_REGION_END: usize =
+        LARGE_TEST_REGION_START + parse_hex(env!("LOADER_TEST_LARGE_RELOCATION_LENGTH"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_TEST_REGION_PERMISSIONS: loader::MemoryPermissions =
+        parse_permissions(env!("LOADER_TEST_LARGE_RELOCATION_PERMISSIONS"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_RODATA_REGION_START: usize = parse_hex(env!("LOADER_TEST_LARGE_RODATA_ORIGIN"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_RODATA_REGION_END: usize =
+        LARGE_RODATA_REGION_START + parse_hex(env!("LOADER_TEST_LARGE_RELOCATION_LENGTH"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_DATA_REGION_START: usize = parse_hex(env!("LOADER_TEST_LARGE_DATA_ORIGIN"));
+    #[cfg(loader_test_large_exec)]
+    pub const LARGE_DATA_REGION_END: usize =
+        LARGE_DATA_REGION_START + parse_hex(env!("LOADER_TEST_LARGE_DATA_LENGTH"));
+
+    #[cfg(loader_test_large_exec)]
+    pub static LARGE_TEST_REGIONS: [loader::MemoryRegion; 3] = [
+        unsafe {
+            loader::MemoryRegion::new(
+                LARGE_TEST_REGION_START,
+                LARGE_TEST_REGION_END,
+                LARGE_TEST_REGION_PERMISSIONS,
+            )
+        },
+        unsafe {
+            loader::MemoryRegion::new(
+                LARGE_RODATA_REGION_START,
+                LARGE_RODATA_REGION_END,
+                loader::MemoryPermissions::READ,
+            )
+        },
+        unsafe {
+            loader::MemoryRegion::new(
+                LARGE_DATA_REGION_START,
+                LARGE_DATA_REGION_END,
+                loader::MemoryPermissions::READ.bitor(loader::MemoryPermissions::WRITE),
+            )
+        },
+    ];
+
+    #[cfg(loader_test_large_exec)]
+    pub static LARGE_XIP_REGIONS: [loader::XipRegion; 2] = [
+        loader::XipRegion::new(LARGE_TEST_REGION_START, LARGE_TEST_REGION_END),
+        loader::XipRegion::new(LARGE_RODATA_REGION_START, LARGE_RODATA_REGION_END),
+    ];
 }
 
 fn read_all(ptr: *const core::ffi::c_char) -> semihosting::io::Result<Vec<u8>> {
     let path = unsafe { core::ffi::CStr::from_ptr(ptr) };
     let mut file = semihosting::fs::File::open(path)?;
-    let mut tmp = [0u8; 64];
+    let mut tmp = [0u8; 512];
     let mut buf = Vec::new();
     loop {
         let size = file.read(&mut tmp)?;
@@ -96,6 +149,11 @@ fn read_all(ptr: *const core::ffi::c_char) -> semihosting::io::Result<Vec<u8>> {
 }
 
 mod test_elf_loader {
+    #[cfg(loader_test_large_exec)]
+    use super::loader_test_config::{
+        LARGE_DATA_REGION_START, LARGE_RODATA_REGION_END, LARGE_RODATA_REGION_START,
+        LARGE_TEST_REGIONS, LARGE_TEST_REGION_END, LARGE_TEST_REGION_START, LARGE_XIP_REGIONS,
+    };
     #[cfg(loader_test_exec)]
     use super::loader_test_config::{
         TEST_REGIONS, TEST_REGION_END, TEST_REGION_PERMISSIONS, TEST_REGION_START,
@@ -105,6 +163,176 @@ mod test_elf_loader {
 
     #[cfg(loader_test_exec)]
     const EXPECTED_RESULT: u32 = 0x9afc_e987;
+
+    #[cfg(loader_test_large_exec)]
+    const USELIBRS_EXPECTED_RESULT: u32 = 0x4c49_4252;
+
+    #[cfg(loader_test_large_exec)]
+    const FLASH_DEVICE_PATH: &[u8] = b"/dev/esp32-flash0\0";
+    #[cfg(loader_test_large_exec)]
+    const ESP32_FLASH_ERASE_RANGE: u32 = 0x40;
+    #[cfg(loader_test_large_exec)]
+    const ESP32_FLASH_MAP_EXEC: u32 = 0x44;
+    #[cfg(loader_test_large_exec)]
+    const ESP32_FLASH_UNMAP: u32 = 0x45;
+    #[cfg(loader_test_large_exec)]
+    const ESP32_FLASH_QUERY_DRAM_SAFE: u32 = 0x46;
+    #[cfg(loader_test_large_exec)]
+    const FLASH_IOCTL_ABI_VERSION: u32 = 1;
+    #[cfg(loader_test_large_exec)]
+    const IROM_VADDR_BASE: u32 = 0x4200_0000;
+    #[cfg(loader_test_large_exec)]
+    const DROM_VADDR_BASE: u32 = 0x3c00_0000;
+    #[cfg(loader_test_large_exec)]
+    const LOADABLE_REGION_BASE: u32 = 0x0011_0000;
+    #[cfg(loader_test_large_exec)]
+    const XIP_IMAGE_SIZE: u32 = 0x0002_0000;
+
+    #[cfg(loader_test_large_exec)]
+    #[repr(C)]
+    struct EraseRangeRequest {
+        version: u32,
+        size: u32,
+        flags: u32,
+        region_offset: u32,
+        length: u32,
+    }
+
+    #[cfg(loader_test_large_exec)]
+    #[repr(C)]
+    struct MapExecRequest {
+        version: u32,
+        size: u32,
+        flags: u32,
+        region_offset: u32,
+        image_size: u32,
+        mapped_address: u32,
+    }
+
+    #[cfg(loader_test_large_exec)]
+    fn flash_region_offset(vaddr: u32) -> Option<u32> {
+        let physical =
+            if (LARGE_TEST_REGION_START as u32..LARGE_TEST_REGION_END as u32).contains(&vaddr) {
+                vaddr.checked_sub(IROM_VADDR_BASE)?
+            } else if (LARGE_RODATA_REGION_START as u32..LARGE_RODATA_REGION_END as u32)
+                .contains(&vaddr)
+            {
+                vaddr.checked_sub(DROM_VADDR_BASE)?
+            } else {
+                return None;
+            };
+        physical.checked_sub(LOADABLE_REGION_BASE)
+    }
+
+    #[cfg(loader_test_large_exec)]
+    fn seek_flash(fd: i32, offset: u32) {
+        use librs::syscall::{Sys, Syscall};
+
+        assert_eq!(
+            Sys::lseek(fd, offset as libc::off_t, libc::SEEK_SET),
+            offset as libc::off_t
+        );
+    }
+
+    #[cfg(loader_test_large_exec)]
+    fn erase_flash(fd: i32, region_offset: u32, length: u32) {
+        use librs::syscall::{Sys, Syscall};
+
+        println!(
+            "flash erase: offset={:#x}, length={:#x}",
+            region_offset, length
+        );
+        let mut erase = EraseRangeRequest {
+            version: FLASH_IOCTL_ABI_VERSION,
+            size: core::mem::size_of::<EraseRangeRequest>() as u32,
+            flags: 0,
+            region_offset,
+            length,
+        };
+        unsafe {
+            Sys::ioctl(
+                fd,
+                ESP32_FLASH_ERASE_RANGE as libc::c_ulong,
+                (&mut erase as *mut EraseRangeRequest).cast(),
+            )
+            .unwrap_or_else(|_| panic!("flash erase ioctl failed"));
+        }
+        println!("flash erase done");
+    }
+
+    #[cfg(loader_test_large_exec)]
+    fn install_xip_segments(fd: i32, elf_data: &[u8]) {
+        use librs::syscall::{Sys, Syscall};
+
+        // Decode only the ELF32 program-header fields needed for flash
+        // installation. `load_xip_elf` performs the one full Goblin parse;
+        // avoiding a second parse keeps the ESP32-C3 test's heap footprint low.
+        fn u16_at(data: &[u8], offset: usize) -> u16 {
+            u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap())
+        }
+        fn u32_at(data: &[u8], offset: usize) -> u32 {
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+        }
+
+        assert_eq!(&elf_data[..4], b"\x7fELF");
+        assert_eq!(elf_data[4], 1, "XIP test image must be ELF32");
+        assert_eq!(elf_data[5], 1, "XIP test image must be little-endian");
+        let phoff = u32_at(elf_data, 28) as usize;
+        let phentsize = u16_at(elf_data, 42) as usize;
+        let phnum = u16_at(elf_data, 44) as usize;
+        assert!(phentsize >= 32);
+        let mut installed = 0;
+        for index in 0..phnum {
+            let ph = phoff + index * phentsize;
+            assert!(ph + phentsize <= elf_data.len());
+            let p_type = u32_at(elf_data, ph);
+            let p_offset = u32_at(elf_data, ph + 4);
+            let p_vaddr = u32_at(elf_data, ph + 8);
+            let p_filesz = u32_at(elf_data, ph + 16);
+            if p_type != 1 || p_filesz == 0 {
+                continue;
+            }
+            let Some(region_offset) = flash_region_offset(p_vaddr) else {
+                continue;
+            };
+            let file_start = p_offset as usize;
+            let file_end = file_start + p_filesz as usize;
+            let segment = &elf_data[file_start..file_end];
+            assert!(region_offset + segment.len() as u32 <= XIP_IMAGE_SIZE);
+            const SECTOR_SIZE: u32 = 4096;
+            let erase_start = region_offset & !(SECTOR_SIZE - 1);
+            let erase_end =
+                (region_offset + segment.len() as u32 + SECTOR_SIZE - 1) & !(SECTOR_SIZE - 1);
+            erase_flash(fd, erase_start, erase_end - erase_start);
+            println!(
+                "flash program: offset={:#x}, length={:#x}",
+                region_offset,
+                segment.len()
+            );
+            seek_flash(fd, region_offset);
+            assert_eq!(
+                Sys::write(fd, segment).unwrap_or_else(|_| panic!("flash write failed")),
+                segment.len()
+            );
+
+            seek_flash(fd, region_offset);
+            let mut checked = 0;
+            let mut scratch = [0u8; 128];
+            while checked < segment.len() {
+                let count = core::cmp::min(scratch.len(), segment.len() - checked);
+                assert_eq!(
+                    Sys::read(fd, &mut scratch[..count])
+                        .unwrap_or_else(|_| panic!("flash read-back failed")),
+                    count
+                );
+                assert_eq!(&scratch[..count], &segment[checked..checked + count]);
+                checked += count;
+            }
+            println!("flash program and verify done");
+            installed += 1;
+        }
+        assert_eq!(installed, 2);
+    }
 
     #[cfg(loader_test_exec)]
     static SHORT_REGIONS: [loader::MemoryRegion; 1] = [unsafe {
@@ -157,6 +385,78 @@ mod test_elf_loader {
             let run = unsafe { core::mem::transmute::<usize, fn()>(entry) };
             run();
         }
+    }
+
+    #[cfg(all(not(debug_assertions), loader_test_large_exec))]
+    #[test]
+    fn test_flash_load_uselibrs_elf_and_run_from_irom() {
+        use librs::{
+            c_str::CStr,
+            syscall::{Sys, Syscall},
+        };
+
+        println!("reading XIP ELF");
+        let buf = read_all(unsafe { LOADER_TEST_USELIBRS_ELF_PATH }).unwrap();
+        println!("XIP ELF read: {} bytes", buf.len());
+        let path = CStr::from_bytes_with_nul(FLASH_DEVICE_PATH).unwrap();
+        let fd = Sys::open(path, libc::O_RDWR, 0);
+        assert!(fd >= 0);
+        println!("flash device opened");
+        install_xip_segments(fd, &buf);
+        println!("XIP segments installed");
+
+        let mut map = MapExecRequest {
+            version: FLASH_IOCTL_ABI_VERSION,
+            size: core::mem::size_of::<MapExecRequest>() as u32,
+            flags: 0,
+            region_offset: 0,
+            image_size: XIP_IMAGE_SIZE,
+            mapped_address: 0,
+        };
+        unsafe {
+            Sys::ioctl(
+                fd,
+                ESP32_FLASH_MAP_EXEC as libc::c_ulong,
+                (&mut map as *mut MapExecRequest).cast(),
+            )
+            .unwrap_or_else(|_| panic!("flash map ioctl failed"));
+        }
+        assert_eq!(map.mapped_address as usize, LARGE_TEST_REGION_START);
+        println!("flash mapped at {:#x}", map.mapped_address);
+
+        let mut dram_safe = 0u32;
+        unsafe {
+            Sys::ioctl(
+                fd,
+                ESP32_FLASH_QUERY_DRAM_SAFE as libc::c_ulong,
+                (&mut dram_safe as *mut u32).cast(),
+            )
+            .unwrap_or_else(|_| panic!("flash DRAM query ioctl failed"));
+        }
+        assert_eq!(dram_safe as usize, LARGE_DATA_REGION_START);
+        Sys::close(fd).unwrap_or_else(|_| panic!("flash device close failed"));
+        println!("flash device closed with XIP mapping retained");
+
+        let mut mapper = loader::MemoryMapper::new(Some(&LARGE_TEST_REGIONS));
+        assert!(loader::load_xip_elf(&buf, &mut mapper, &LARGE_XIP_REGIONS).is_ok());
+        println!("non-XIP segments loaded");
+        let entry = mapper.real_entry().unwrap();
+        assert_eq!(entry, LARGE_TEST_REGION_START);
+        let run = unsafe { core::mem::transmute::<usize, extern "C" fn() -> u32>(entry) };
+        assert_eq!(run(), USELIBRS_EXPECTED_RESULT);
+        println!("IROM entry returned");
+
+        let fd = Sys::open(path, libc::O_RDWR, 0);
+        assert!(fd >= 0);
+        unsafe {
+            Sys::ioctl(
+                fd,
+                ESP32_FLASH_UNMAP as libc::c_ulong,
+                core::ptr::null_mut(),
+            )
+            .unwrap_or_else(|_| panic!("flash unmap ioctl failed"));
+        }
+        Sys::close(fd).unwrap_or_else(|_| panic!("flash device close failed"));
     }
 
     // FIXME: We should use FS's lseek API to get lower footprint.

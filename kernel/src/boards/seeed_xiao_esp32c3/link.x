@@ -7,6 +7,9 @@
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
 
+/* Mask-ROM flash and cache symbols used by drivers/flash/esp32_rom.rs. */
+INCLUDE "rom/esp32c3.rom.ld"
+
 MEMORY
 {
     /*
@@ -276,8 +279,17 @@ SECTIONS
   .heap (NOLOAD) : {
     . = ALIGN(8);
     __heap_start = .;
-    . = ORIGIN(DRAM) + LENGTH(DRAM) - 0x6000;
+    . = ORIGIN(DRAM) + LENGTH(DRAM) - 0x7000;
     __heap_end = .;
+  } > RWDATA
+
+  /* Writable state for a flash-XIP ELF. Keep it outside both the kernel heap
+     and the system stack so a loaded PT_LOAD cannot corrupt either one. */
+  .loader_rw (NOLOAD) : {
+    . = ALIGN(4);
+    __loader_rw_start = .;
+    . += 0x1000;
+    __loader_rw_end = .;
   } > RWDATA
 
   .stack (NOLOAD) : {

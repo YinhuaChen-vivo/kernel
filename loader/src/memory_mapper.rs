@@ -259,6 +259,15 @@ impl MemoryMapper {
         Ok(size)
     }
 
+    pub fn write_zeroes_at(&mut self, vaddr: usize, size: usize) -> Result<usize> {
+        if size == 0 {
+            return Ok(0);
+        }
+        let real_begin = self.inner_real_begin(vaddr, size)?;
+        unsafe { core::ptr::write_bytes(real_begin, 0, size) };
+        Ok(size)
+    }
+
     pub fn write_value_at<T>(&mut self, vaddr: usize, val: T) -> Result<usize>
     where
         T: Sized,

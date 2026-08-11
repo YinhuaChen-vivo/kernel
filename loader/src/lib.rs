@@ -26,6 +26,26 @@ pub use memory_mapper::{MemoryMapper, MemoryPermissions, MemoryRegion};
 
 pub type Result = core::result::Result<(), &'static str>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XipRegion {
+    start: usize,
+    end: usize,
+}
+
+impl XipRegion {
+    pub const fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    fn contains(self, start: usize, end: usize) -> bool {
+        self.start < self.end && start >= self.start && end <= self.end
+    }
+
+    fn intersects(self, start: usize, end: usize) -> bool {
+        self.start < end && start < self.end
+    }
+}
+
 fn build_memory_layout(binary: &Elf, mapper: &mut MemoryMapper) -> Result {
     for ph in &binary.program_headers {
         match ph.p_type {
@@ -47,19 +67,52 @@ fn allocate_memory_for_segments(_binary: &Elf, mapper: &mut MemoryMapper) -> Res
     Ok(())
 }
 
-fn copy_content_to_memory(buffer: &[u8], binary: &Elf, mapper: &mut MemoryMapper) -> Result {
-    // FIXME: We are assuming if filesize < memsize, (memsize -
-    // filesize) bits are .bss. I need to read more about ELF spec to
-    // find out exceptions. Currently, it just works.
+fn copy_content_to_memory(
+    buffer: &[u8],
+    binary: &Elf,
+    mapper: &mut MemoryMapper,
+    xip_regions: &[XipRegion],
+) -> Result {
     for ph in &binary.program_headers {
         match ph.p_type {
             goblin::elf::program_header::PT_LOAD => {
-                let Some(src) =
-                    buffer.get(ph.p_offset as usize..(ph.p_offset + ph.p_filesz) as usize)
-                else {
+                if ph.p_filesz > ph.p_memsz {
+                    return Err("ELF segment file size exceeds memory size");
+                }
+                let start = usize::try_from(ph.p_vaddr).map_err(|_| "ELF address overflow")?;
+                let mem_size = usize::try_from(ph.p_memsz).map_err(|_| "ELF size overflow")?;
+                let end = start.checked_add(mem_size).ok_or("ELF address overflow")?;
+                let in_xip = xip_regions
+                    .iter()
+                    .copied()
+                    .any(|region| region.contains(start, end));
+                if in_xip {
+                    if ph.p_flags & goblin::elf::program_header::PF_W != 0 {
+                        return Err("Writable ELF segment cannot execute in place");
+                    }
+                    continue;
+                }
+                if xip_regions
+                    .iter()
+                    .copied()
+                    .any(|region| region.intersects(start, end))
+                {
+                    return Err("ELF segment crosses an XIP region boundary");
+                }
+
+                let file_offset =
+                    usize::try_from(ph.p_offset).map_err(|_| "ELF file offset overflow")?;
+                let file_size = usize::try_from(ph.p_filesz).map_err(|_| "ELF size overflow")?;
+                let file_end = file_offset
+                    .checked_add(file_size)
+                    .ok_or("ELF file offset overflow")?;
+                let Some(src) = buffer.get(file_offset..file_end) else {
                     return Err("Invalid indices to the buffer");
                 };
-                mapper.write_slice_at(ph.p_vaddr as usize, src)?;
+                mapper.write_slice_at(start, src)?;
+                let zero_size = mem_size - file_size;
+                let zero_start = start.checked_add(file_size).ok_or("ELF address overflow")?;
+                mapper.write_zeroes_at(zero_start, zero_size)?;
             }
             _ => continue,
         }
@@ -94,7 +147,7 @@ fn load_dyn_elf(buffer: &[u8], binary: &Elf, mapper: &mut MemoryMapper) -> Resul
     }
     build_memory_layout(binary, mapper)?;
     allocate_memory_for_segments(binary, mapper)?;
-    copy_content_to_memory(buffer, binary, mapper)?;
+    copy_content_to_memory(buffer, binary, mapper, &[])?;
     relocate(binary, mapper)?;
     mapper.real_entry()?;
     Ok(())
@@ -105,9 +158,49 @@ fn load_exec_elf(buffer: &[u8], binary: &Elf, mapper: &mut MemoryMapper) -> Resu
         return Err("ET_EXEC requires Fixed mapping mode");
     }
     build_memory_layout(binary, mapper)?;
-    copy_content_to_memory(buffer, binary, mapper)?;
+    copy_content_to_memory(buffer, binary, mapper, &[])?;
+    synchronize_instruction_stream();
     mapper.real_entry()?;
     Ok(())
+}
+
+/// Finish loading an ET_EXEC image whose read-only XIP segments have already
+/// been installed in flash and mapped at their linked virtual addresses.
+/// Non-XIP PT_LOAD segments are copied and zero-filled through `mapper`.
+pub fn load_xip_elf(buffer: &[u8], mapper: &mut MemoryMapper, xip_regions: &[XipRegion]) -> Result {
+    if mapper.mode_kind() != MappingModeKind::Fixed {
+        return Err("XIP ET_EXEC requires Fixed mapping mode");
+    }
+    if xip_regions.is_empty() {
+        return Err("XIP load requires at least one mapped region");
+    }
+    let binary = Elf::parse(buffer).map_err(|_| "Unable to parse the buffer")?;
+    if binary.header.e_type != ET_EXEC {
+        return Err("XIP load requires an ET_EXEC image");
+    }
+    let entry = usize::try_from(binary.entry).map_err(|_| "ELF entry overflow")?;
+    if !xip_regions
+        .iter()
+        .copied()
+        .any(|region| region.contains(entry, entry.saturating_add(1)))
+    {
+        return Err("ELF entry is outside mapped XIP regions");
+    }
+    build_memory_layout(&binary, mapper)?;
+    copy_content_to_memory(buffer, &binary, mapper, xip_regions)?;
+    synchronize_instruction_stream();
+    mapper.real_entry()?;
+    Ok(())
+}
+
+#[inline]
+fn synchronize_instruction_stream() {
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    unsafe {
+        // PT_LOAD contents were written through the data path and may replace
+        // instructions that are still present in the instruction cache.
+        core::arch::asm!("fence.i", options(nostack, preserves_flags));
+    }
 }
 
 // FIXME: We should use lseek to parse ELF files to achieve low footprint.

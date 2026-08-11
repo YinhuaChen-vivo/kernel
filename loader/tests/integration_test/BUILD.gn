@@ -48,6 +48,17 @@ build_rust("loader_integration_test") {
     ]
     cfgs = [ "loader_test_exec" ]
   }
+  if (defined(loader_test_large_relocation)) {
+    rustenv += [
+      "LOADER_TEST_LARGE_RELOCATION_ORIGIN=${loader_test_large_relocation.origin}",
+      "LOADER_TEST_LARGE_RELOCATION_LENGTH=${loader_test_large_relocation.length}",
+      "LOADER_TEST_LARGE_RELOCATION_PERMISSIONS=${loader_test_large_relocation.permissions}",
+      "LOADER_TEST_LARGE_RODATA_ORIGIN=${loader_test_large_relocation.rodata_origin}",
+      "LOADER_TEST_LARGE_DATA_ORIGIN=${loader_test_large_relocation.data_origin}",
+      "LOADER_TEST_LARGE_DATA_LENGTH=${loader_test_large_relocation.data_length}",
+    ]
+    cfgs += [ "loader_test_large_exec" ]
+  }
 }
 
 run_clippy("loader_integration_test_clippy") {

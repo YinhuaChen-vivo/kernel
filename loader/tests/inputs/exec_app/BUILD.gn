@@ -17,51 +17,100 @@ import("//build/templates/rust.gni")
 
 assert(defined(loader_test_relocation),
        "loader_test_relocation must be defined for the EXEC loader test app")
-assert(defined(loader_test_relocation.region),
-       "loader_test_relocation.region must be defined")
-assert(defined(loader_test_relocation.origin),
-       "loader_test_relocation.origin must be defined")
-assert(defined(loader_test_relocation.length),
-       "loader_test_relocation.length must be defined")
-assert(defined(loader_test_relocation.permissions),
-       "loader_test_relocation.permissions must be defined")
 
-_loader_test_linker_script_template = "link.x.template"
-_loader_test_linker_script = "${target_gen_dir}/loader_test_relocation_link.x"
+template("gen_loader_test_linker_script") {
+  _relocation = invoker.relocation
+  assert(defined(_relocation.region), "relocation.region must be defined")
+  assert(defined(_relocation.origin), "relocation.origin must be defined")
+  assert(defined(_relocation.length), "relocation.length must be defined")
+  assert(defined(_relocation.permissions),
+         "relocation.permissions must be defined")
 
-action("gen_loader_test_relocation") {
-  testonly = true
-  script = "//kernel/loader/tests/scripts/gen_loader_test_relocation.py"
-  inputs = [ _loader_test_linker_script_template ]
-  args = [
-    "--region",
-    loader_test_relocation.region,
-    "--origin",
-    loader_test_relocation.origin,
-    "--length",
-    loader_test_relocation.length,
-    "--permissions",
-    loader_test_relocation.permissions,
-    "--linker-script-template",
-    rebase_path(_loader_test_linker_script_template),
-    "--linker-script",
-    rebase_path(_loader_test_linker_script),
-  ]
-  outputs = [ _loader_test_linker_script ]
+  action(target_name) {
+    testonly = true
+    script = "//kernel/loader/tests/scripts/gen_loader_test_relocation.py"
+    inputs = [ invoker.template ]
+    args = [
+      "--region",
+      _relocation.region,
+      "--origin",
+      _relocation.origin,
+      "--length",
+      _relocation.length,
+      "--permissions",
+      _relocation.permissions,
+      "--linker-script-template",
+      rebase_path(invoker.template),
+      "--linker-script",
+      rebase_path(invoker.output),
+    ]
+    if (defined(_relocation.rodata_origin)) {
+      args += [
+        "--rodata-origin",
+        _relocation.rodata_origin,
+        "--data-origin",
+        _relocation.data_origin,
+        "--data-length",
+        _relocation.data_length,
+      ]
+    }
+    outputs = [ invoker.output ]
+  }
 }
 
-build_rust("loader_test_app") {
-  testonly = true
-  crate_type = "bin"
-  sources = [ "src/main.rs" ]
-  build_deps = [ ":gen_loader_test_relocation" ]
-  configs += [ "//build/boards/${board}:app_config" ]
-  linker_script = _loader_test_linker_script
-  rustflags = [
-    "-Cpanic=abort",
-    "-Crelocation-model=static",
-    "-Clink-arg=-Wl,-static",
-    "-Clink-arg=-Wl,--no-pie",
-    "-Clink-arg=-nostartfiles",
-  ]
+_xor_linker_script = "${target_gen_dir}/xor_link.x"
+gen_loader_test_linker_script("gen_xor_linker_script") {
+  relocation = loader_test_relocation
+  template = "link.x.template"
+  output = _xor_linker_script
+}
+
+if (defined(loader_test_large_relocation)) {
+  _uselibrs_linker_script = "${target_gen_dir}/uselibrs_link.x"
+  gen_loader_test_linker_script("gen_uselibrs_linker_script") {
+    relocation = loader_test_large_relocation
+    template = "xip_link.x.template"
+    output = _uselibrs_linker_script
+  }
+}
+
+template("loader_exec_app") {
+  build_rust(target_name) {
+    testonly = true
+    crate_type = "bin"
+    sources = [ invoker.source ]
+    build_deps = [ invoker.linker_script_target ]
+    deps = []
+    if (defined(invoker.deps)) {
+      deps += invoker.deps
+    }
+    configs += [ "//build/boards/${board}:app_config" ]
+    linker_script = invoker.linker_script
+    rustflags = [
+      "-Cpanic=abort",
+      "-Crelocation-model=static",
+      "-Clink-arg=-Wl,-static",
+      "-Clink-arg=-Wl,--no-pie",
+      "-Clink-arg=-Wl,--strip-all",
+      "-Clink-arg=-nostartfiles",
+    ]
+  }
+}
+
+loader_exec_app("loader_test_app") {
+  source = "src/xor.rs"
+  linker_script_target = ":gen_xor_linker_script"
+  linker_script = _xor_linker_script
+}
+
+if (defined(loader_test_large_relocation)) {
+  loader_exec_app("loader_test_uselibrs") {
+    source = "src/uselibrs.rs"
+    linker_script_target = ":gen_uselibrs_linker_script"
+    linker_script = _uselibrs_linker_script
+    deps = [
+      "//kernel/kernel:atomic",
+      "//librs:librs_swi",
+    ]
+  }
 }
