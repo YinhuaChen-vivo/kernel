@@ -153,12 +153,17 @@ fn load_dyn_elf(buffer: &[u8], binary: &Elf, mapper: &mut MemoryMapper) -> Resul
     Ok(())
 }
 
-fn load_exec_elf(buffer: &[u8], binary: &Elf, mapper: &mut MemoryMapper) -> Result {
+fn load_exec_elf(
+    buffer: &[u8],
+    binary: &Elf,
+    mapper: &mut MemoryMapper,
+    xip_regions: &[XipRegion],
+) -> Result {
     if mapper.mode_kind() != MappingModeKind::Fixed {
         return Err("ET_EXEC requires Fixed mapping mode");
     }
     build_memory_layout(binary, mapper)?;
-    copy_content_to_memory(buffer, binary, mapper, &[])?;
+    copy_content_to_memory(buffer, binary, mapper, xip_regions)?;
     synchronize_instruction_stream();
     mapper.real_entry()?;
     Ok(())
@@ -186,11 +191,7 @@ pub fn load_xip_elf(buffer: &[u8], mapper: &mut MemoryMapper, xip_regions: &[Xip
     {
         return Err("ELF entry is outside mapped XIP regions");
     }
-    build_memory_layout(&binary, mapper)?;
-    copy_content_to_memory(buffer, &binary, mapper, xip_regions)?;
-    synchronize_instruction_stream();
-    mapper.real_entry()?;
-    Ok(())
+    load_exec_elf(buffer, &binary, mapper, xip_regions)
 }
 
 #[inline]
@@ -208,7 +209,7 @@ pub fn load_elf(buffer: &[u8], mapper: &mut MemoryMapper) -> Result {
     let binary = Elf::parse(buffer).map_err(|_| "Unable to parse the buffer")?;
     match binary.header.e_type {
         ET_DYN => load_dyn_elf(buffer, &binary, mapper),
-        ET_EXEC => load_exec_elf(buffer, &binary, mapper),
+        ET_EXEC => load_exec_elf(buffer, &binary, mapper, &[]),
         _ => Err("Unsupported ELF type"),
     }
 }
