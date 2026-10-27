@@ -162,7 +162,9 @@ impl BuddyTestArena {
     fn new(total_pages: usize) -> Self {
         assert!(total_pages.is_power_of_two());
         let arena_size = total_pages.checked_mul(PAGE_SIZE).unwrap();
-        let arena_layout = Layout::from_size_align(arena_size, PAGE_SIZE).unwrap();
+        // Align the arena to its full size so every buddy order that fits in
+        // it is naturally aligned in the translated physical address space.
+        let arena_layout = Layout::from_size_align(arena_size, arena_size).unwrap();
         let backing = TestAllocation::new(arena_layout);
         let metadata_layout = BuddyAllocator::metadata_layout(total_pages).unwrap();
         let manageable_start_pfn = metadata_layout.size().div_ceil(PAGE_SIZE);
