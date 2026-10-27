@@ -40,7 +40,8 @@ config ALLOCATOR_BUDDY
         Enable the buddy allocator to manage all physical memory pages.
         This can coexist with TLSF/SLAB/LLFF, which remain the selected
         heap allocator for small allocations.
-        When enabled, slab allocator operates on top of buddy-allocated
-        page pools; >= PAGE_SIZE allocations go directly to buddy;
-        tlsf/llff keep their original __heap_start~__heap_end path.
+        When combined with dynamic slab, buddy supplies slab pages and handles
+        requests larger than 2048 bytes. GlobalAlloc always delegates to the
+        selected heap; tlsf/static-slab/llff keep their original
+        __heap_start~__heap_end path.
         When disabled, the kernel falls back to direct heap management.
